@@ -1,38 +1,110 @@
 import cv2
-from src.detector import FaceEyeDetector
 
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-detector = FaceEyeDetector()
+from src.face_mesh import FaceMeshDetector
+from src.utils import (
+    DrowsinessMetrics,
+    draw_dashboard,
+    draw_eye_contours
+)
+from src.alert import AlertManager
 
-print("✅ Press Q to quit")
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+def main():
 
-    frame = cv2.flip(frame, 1)
-    detections = detector.detect(frame)
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
-    for item in detections:
-        x, y, w, h = item["face"]
-        eyes = item["eyes"]
+    detector = FaceMeshDetector()
+    metrics = DrowsinessMetrics()
+    alerts = AlertManager()
 
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    print("Press Q to quit")
 
-        for (ex, ey, ew, eh) in eyes:
-            cv2.rectangle(
+    while True:
+
+        ret, frame = cap.read()
+
+        if not ret:
+            break
+
+        frame = cv2.flip(frame, 1)
+
+        results = detector.detect(frame)
+
+        if results.multi_face_landmarks:
+
+            for face_landmarks in results.multi_face_landmarks:
+
+                features = detector.extract_features(
+                    frame,
+                    face_landmarks
+                )
+
+                avg_ear = features["avg_ear"]
+                mouth_opening = features["mouth_opening"]
+
+                print(f"EAR: {avg_ear:.3f}")
+
+                metrics.update_eye_state(
+                    avg_ear,
+                    threshold=0.24
+                )
+
+                metrics.update_yawn(
+                    mouth_opening,
+                    threshold=35
+                )
+
+                metrics.update_drowsiness_timer(
+                    avg_ear,
+                    threshold=0.24
+                )
+
+                draw_eye_contours(
+                    frame,
+                    features["left_eye_points"],
+                    features["right_eye_points"]
+                )
+
+                draw_dashboard(
+                    frame,
+                    features,
+                    metrics
+                )
+
+                alert_level = metrics.get_alert_level()
+
+                alerts.update_alert(alert_level)
+
+                if alert_level == "ALARM":
+                    alerts.handle_high_alert(frame)
+
+        else:
+
+            cv2.putText(
                 frame,
-                (x+ex, y+ey),
-                (x+ex+ew, y+ey+eh),
-                (255, 0, 0),
+                "NO FACE DETECTED",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
                 2
             )
 
-    cv2.imshow("Driver Monitor", frame)
+            alerts.stop_alarm()
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        cv2.imshow(
+            "Driver Drowsiness Detection System",
+            frame
+        )
 
-cap.release()
-cv2.destroyAllWindows()
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    alerts.stop_alarm()
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
